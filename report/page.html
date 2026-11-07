@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JS Runtime Benchmark</title>
+<meta name="description" content="Node.js vs Deno vs Bun under k6 load, single process and one worker per CPU, with Go and PHP results from the same machine for reference.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f7fb; --surface: #fcfcfb; --surface-2: #f1f3f8; --fg: #0b0b0b; --muted: #52514e;
+  --line: #e3e7ef; --accent: #2a78d6; --accent-soft: #e6f0fc; --good: #0a7a0a;
+  --shadow: 0 1px 2px rgba(15,23,42,.05), 0 8px 24px rgba(15,23,42,.06);
+  /* One hue per runtime (validated categorical slots), neutrals for the references. */
+  --c-node: #1baf7a; --c-deno: #2a78d6; --c-bun: #eb6834; --c-go: #6b7280; --c-php: #a8acb3;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111110; --surface: #1a1a19; --surface-2: #232321; --fg: #f0efec; --muted: #c3c2b7;
+    --line: #2e2e2b; --accent: #3987e5; --accent-soft: rgba(57,135,229,.14); --good: #34c759; --shadow: none;
+    --c-node: #199e70; --c-deno: #3987e5; --c-bun: #d95926; --c-go: #9a9fa8; --c-php: #5f636b;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111110; --surface: #1a1a19; --surface-2: #232321; --fg: #f0efec; --muted: #c3c2b7;
+  --line: #2e2e2b; --accent: #3987e5; --accent-soft: rgba(57,135,229,.14); --good: #34c759; --shadow: none;
+  --c-node: #199e70; --c-deno: #3987e5; --c-bun: #d95926; --c-go: #9a9fa8; --c-php: #5f636b;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 Inter, system-ui, sans-serif; }
+a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+code, .mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .86em; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+
+header { padding: 56px 0 28px; }
+.eyebrow { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: var(--accent); background: var(--accent-soft); padding: 4px 12px; border-radius: 999px; font-weight: 500; }
+h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.1; margin: 16px 0 12px; letter-spacing: -.02em; font-weight: 800; }
+h1 span { color: var(--accent); }
+.lede { color: var(--muted); font-size: 17px; max-width: 760px; margin: 0; }
+.links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); font-weight: 500; font-size: 14px; }
+.btn:hover { border-color: var(--accent); text-decoration: none; }
+.btn svg { width: 16px; height: 16px; }
+
+section { margin: 40px 0; }
+h2 { font-size: 22px; margin: 0 0 6px; letter-spacing: -.01em; }
+.sub { color: var(--muted); margin: 0 0 18px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 20px; box-shadow: var(--shadow); }
+
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.stat .k { color: var(--muted); font-size: 13px; font-weight: 500; }
+.stat .v { font-size: 28px; font-weight: 700; letter-spacing: -.02em; margin-top: 4px; }
+.stat .n { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+.rt-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.rt h3 { margin: 0 0 12px; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+.rt h3 .dot { width: 11px; height: 11px; }
+.mode { padding: 12px 0; border-top: 1px solid var(--line); }
+.mode:first-of-type { border-top: 0; padding-top: 0; }
+.mode .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.mode .name { font-weight: 600; font-size: 14px; }
+.mode .detail { color: var(--muted); font-size: 12.5px; }
+.mode .big { font-size: 22px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+.mode .unit { color: var(--muted); font-size: 12px; font-weight: 500; }
+.mode .facts { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+.mode .facts b { color: var(--fg); font-weight: 600; }
+.badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.swatch { display: inline-block; width: 14px; height: 10px; border-radius: 3px; vertical-align: 0; margin-right: 6px; background: var(--c); }
+.swatch.hatch { background: repeating-linear-gradient(135deg, var(--c) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1.5px var(--c); }
+
+.chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.chart-head h3 { margin: 0; font-size: 16px; }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.seg button { border: 0; background: transparent; color: var(--muted); font: 500 13px Inter, sans-serif; padding: 5px 12px; border-radius: 7px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.chart { position: relative; height: 360px; }
+.chart.tall { height: 420px; }
+.key { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 10px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; font-size: 12.5px; vertical-align: bottom; }
+th:first-child, td:first-child { text-align: left; }
+tr:last-child td { border-bottom: 0; }
+td.best { color: var(--good); font-weight: 700; }
+tr.ref td, td.ref { color: var(--muted); }
+tr.group td { background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 6px 12px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; background: var(--c); }
+.p95 { color: var(--muted); font-size: 12.5px; font-weight: 400; }
+
+.takeaways { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.takeaways .card h3 { margin: 0 0 6px; font-size: 15px; }
+.takeaways .card p { margin: 0; color: var(--muted); }
+
+.meta { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.meta .card { overflow-x: auto; }
+.meta table td:first-child { color: var(--muted); }
+.meta table td { text-align: left; white-space: normal; }
+ul.notes { margin: 0; padding-left: 18px; color: var(--muted); } ul.notes li { margin: 6px 0; }
+
+footer { color: var(--muted); font-size: 13px; padding: 32px 0 56px; border-top: 1px solid var(--line); margin-top: 56px; overflow-wrap: anywhere; }
+
+@media (max-width: 960px) {
+  .rt-grid { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .meta, .takeaways { grid-template-columns: 1fr; }
+}
+@media (max-width: 520px) {
+  header { padding-top: 36px; }
+  .stats { grid-template-columns: 1fr; }
+  .stat .v { font-size: 22px; }
+  .chart { height: 320px; } .chart.tall { height: 380px; }
+  .card { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="eyebrow" id="date-chip"></span>
+    <h1>JavaScript runtime benchmark: <span>Node.js, Deno, Bun</span></h1>
+    <p class="lede">The same API on three JavaScript runtimes, each as a single process and with one worker per CPU,
+      driven by the same k6 load test as the
+      <a href="https://mochavin.github.io/go-framework-bench/">Go framework</a> and
+      <a href="https://mochavin.github.io/fpm-vs-swoole-vs-franken/">Laravel PHP runtime</a> benchmarks, on the same machine.</p>
+    <div class="links">
+      <a class="btn" href="https://github.com/mochavin/js-runtime-bench">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8"/></svg>
+        Source on GitHub</a>
+      <a class="btn" href="https://github.com/mochavin/js-runtime-bench/tree/main/benchmarks">Raw k6 summaries</a>
+      <a class="btn" href="https://mochavin.github.io/go-framework-bench/">Go results</a>
+      <a class="btn" href="https://mochavin.github.io/fpm-vs-swoole-vs-franken/">PHP results</a>
+    </div>
+  </header>
+
+  <section>
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <section>
+    <h2>Runtimes</h2>
+    <p class="sub">Whole run, all five scenarios combined. Latency counts successful responses only.</p>
+    <div class="rt-grid" id="rt-cards"></div>
+  </section>
+
+  <section>
+    <h2>Takeaways</h2>
+    <p class="sub">What the numbers say, and what they don't.</p>
+    <div class="takeaways" id="takeaways"></div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="chart-head">
+        <h3>Throughput (requests per second)</h3>
+        <div class="seg ref-toggle" id="rps-ref" role="group" aria-label="Reference runtimes shown">
+          <button aria-pressed="true" data-v="js">JS only</button>
+          <button aria-pressed="false" data-v="all">With Go + PHP</button>
+        </div>
+      </div>
+      <div class="chart"><canvas id="rps-chart" role="img" aria-label="Throughput per runtime, horizontal bar chart"></canvas></div>
+      <div class="key" id="rps-key"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="chart-head">
+        <h3>Latency per scenario <span class="p95">(ms, log scale)</span></h3>
+        <div class="controls">
+          <div class="seg" id="lat-metric" role="group" aria-label="Latency metric">
+            <button aria-pressed="true" data-v="avg">Average</button>
+            <button aria-pressed="false" data-v="p95">p95</button>
+          </div>
+          <div class="seg ref-toggle" id="lat-ref" role="group" aria-label="Reference runtimes shown">
+            <button aria-pressed="true" data-v="js">JS only</button>
+            <button aria-pressed="false" data-v="all">With Go + PHP</button>
+          </div>
+        </div>
+      </div>
+      <div class="chart tall"><canvas id="lat-chart" role="img" aria-label="Latency per scenario, grouped bar chart"></canvas></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Per scenario</h2>
+    <p class="sub">Average latency in ms, with p95 below. Green marks the best JS runtime in each row. The grey columns are the fastest Go framework and the fastest PHP runtime by throughput.</p>
+    <div class="card table-wrap"><table id="scen-table"></table></div>
+  </section>
+
+  <section>
+    <h2>Overall, with Go and PHP for reference</h2>
+    <p class="sub">Go and PHP ran on the same VM, with the same k6 script and database schema.</p>
+    <div class="card table-wrap"><table id="overall-table"></table></div>
+  </section>
+
+  <section>
+    <h2>How it was run</h2>
+    <p class="sub">Everything runs in Docker Compose on one VM. Runtimes are benchmarked one at a time.</p>
+    <div class="meta">
+      <div class="card">
+        <h3 style="margin:0 0 8px;font-size:15px">k6 scenarios</h3>
+        <div class="table-wrap"><table>
+          <tr><th>Scenario</th><th>Endpoint</th><th>VUs</th><th>Duration</th></tr>
+          <tr><td>Health check</td><td><code>GET /api/health</code></td><td>5000</td><td>30s</td></tr>
+          <tr><td>List 20 posts</td><td><code>GET /api/posts</code></td><td>1000→500→1000→0</td><td>60s</td></tr>
+          <tr><td>Single post</td><td><code>GET /api/posts/{id}</code></td><td>3000</td><td>30s</td></tr>
+          <tr><td>Create post</td><td><code>POST /api/posts</code></td><td>2000</td><td>30s</td></tr>
+          <tr><td>Heavy compute</td><td><code>GET /api/heavy</code></td><td>2000</td><td>30s</td></tr>
+        </table></div>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;font-size:15px">Test machine</h3>
+        <table>
+          <tr><td>Host</td><td>Azure <code>Standard_D4as_v6</code></td></tr>
+          <tr><td>CPU</td><td>AMD EPYC 9V74, 4 vCPU</td></tr>
+          <tr><td>RAM</td><td>15.6 GiB, no swap</td></tr>
+          <tr><td>OS</td><td>Ubuntu 24.04.5, kernel 7.0</td></tr>
+          <tr><td>Runtimes</td><td>Node.js 26.13.0, Deno 2.9.8, Bun 1.4.4</td></tr>
+          <tr><td>Database</td><td>PostgreSQL 16, postgres.js 4.1.0, 50 connections per app</td></tr>
+          <tr><td>Load</td><td>k6 v2.3.0 on the same machine</td></tr>
+        </table>
+      </div>
+      <div class="card" style="grid-column:1/-1">
+        <h3 style="margin:0 0 8px;font-size:15px">Fairness notes</h3>
+        <ul class="notes">
+          <li>Routing, DB access, validation and the CPU workload live in one shared module that runs unchanged on all three runtimes. Each runtime only provides its own HTTP server: <code>node:http</code>, <code>deno serve</code>, <code>Bun.serve</code>.</li>
+          <li>All three use the same Postgres driver (postgres.js), installed once and copied into every image.</li>
+          <li>Multi-worker variants run one worker per CPU (4) and split the 50 database connections between them, so every app has the same total.</li>
+          <li>No request logging. Every container gets a 65535 open-file limit. The <code>posts</code> table is reset to the same 100 seeded rows before each run.</li>
+          <li>k6, Postgres and the server share the same 4 vCPUs, so absolute numbers are lower than on a dedicated setup. The comparison is still like for like.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Generated by <code>node report/build.mjs</code> from the k6 summaries in
+    <a href="https://github.com/mochavin/js-runtime-bench">mochavin/js-runtime-bench</a>.
+    <span id="sources"></span>
+  </footer>
+</div>
+
+<script>
+// Wrapped in a function: top-level names like `top` clash with window globals.
+(() => {
+const D = /*DATA*/null;
+const JS = D.js, GO = D.go || [], PHP = D.php || [], SC = D.scenarios;
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 0) => v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const ms = (v) => v >= 100 ? fmt(v) : fmt(v, 1);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const pct = (a, b) => `${a >= b ? '+' : '−'}${fmt(Math.abs(a / b - 1) * 100)}%`;
+const top = (rows) => rows.length ? rows.reduce((a, b) => (b.rps > a.rps ? b : a)) : null;
+const swatch = (r) => `<span class="swatch${r.multi ? '' : ' hatch'}" style="--c:var(--c-${r.hue})"></span>`;
+
+$('date-chip').textContent = `Run ${D.date} · Azure D4as_v6 · 4 vCPU`;
+
+const bestJS = top(JS), worstJS = JS.reduce((a, b) => (b.rps < a.rps ? b : a));
+const bestGo = top(GO), bestPHP = top(PHP);
+const REF = [bestGo, bestPHP].filter(Boolean); // charts show only the fastest of each reference
+const single = JS.filter((r) => !r.multi), multi = JS.filter((r) => r.multi);
+const pair = (hue) => [JS.find((r) => r.hue === hue && !r.multi), JS.find((r) => r.hue === hue && r.multi)];
+
+// ─── Headline numbers ────────────────────────────
+{
+  const stats = [
+    { k: 'Highest throughput', v: `${fmt(bestJS.rps)} req/s`, n: bestJS.label },
+  ];
+  // The second tile shows whichever mode did not win, so the two never repeat.
+  const other = bestJS.multi ? top(single) : top(multi);
+  if (other) stats.push({ k: `Best ${other.multi ? 'with a worker per CPU' : 'single process'}`, v: `${fmt(other.rps)} req/s`, n: other.label });
+  const h = SC.findIndex((x) => x.key === 'heavy_compute');
+  const gains = ['node', 'deno', 'bun'].map(pair).filter(([a, b]) => a && b).map(([a, b]) => a.scenAvg[h] / b.scenAvg[h]);
+  if (gains.length) stats.push({ k: 'Heavy compute, worker per CPU', v: `${fmt(Math.min(...gains), 1)}–${fmt(Math.max(...gains), 1)}× faster`, n: 'avg latency vs the same runtime on 1 process' });
+  if (bestGo) stats.push({ k: `Best JS vs ${bestGo.label}`, v: `${fmt(bestJS.rps / bestGo.rps * 100)}%`, n: `of Go's throughput (${fmt(bestGo.rps)} req/s)` });
+  $('stats').innerHTML = stats.map((s) => `<div class="card stat"><div class="k">${esc(s.k)}</div><div class="v">${s.v}</div><div class="n">${esc(s.n)}</div></div>`).join('');
+}
+
+// ─── Runtime cards: one per runtime, both modes ──
+{
+  const NAMES = { node: 'Node.js', deno: 'Deno', bun: 'Bun' };
+  const bestAvg = Math.min(...JS.map((r) => r.avg));
+  $('rt-cards').innerHTML = ['node', 'deno', 'bun'].map((hue) => {
+    const modes = JS.filter((r) => r.hue === hue);
+    if (!modes.length) return '';
+    return `<div class="card rt"><h3><span class="dot" style="--c:var(--c-${hue})"></span>${NAMES[hue]}</h3>${modes.map((r) => {
+      const badge = r === bestJS ? 'Top req/s' : r.avg === bestAvg ? 'Lowest avg' : '';
+      return `<div class="mode">
+        <div class="row"><div class="name">${swatch(r)}${r.multi ? 'Worker per CPU' : 'Single process'} ${badge ? `<span class="badge">${badge}</span>` : ''}</div>
+          <div class="big">${fmt(r.rps)} <span class="unit">req/s</span></div></div>
+        <div class="detail">${esc(r.detail)}</div>
+        <div class="facts"><span>avg <b>${ms(r.avg)} ms</b></span><span>p95 <b>${ms(r.p95)} ms</b></span><span><b>${fmt(r.reqs / 1e6, 2)} M</b> req</span><span>failed <b>${fmt(r.failed, 2)}%</b></span></div>
+      </div>`;
+    }).join('')}</div>`;
+  }).join('');
+}
+
+// ─── Takeaways (computed from the data) ──────────
+{
+  const h = SC.findIndex((s) => s.key === 'heavy_compute');
+  const tk = [];
+  const ranked = (rows) => [...rows].sort((a, b) => b.rps - a.rps);
+  const all = [...JS, ...GO], lo = Math.min(...all.map((r) => r.rps)), hi = Math.max(...all.map((r) => r.rps));
+  tk.push(['The machine sets the ceiling, not the runtime', `All ${JS.length} JS variants${GO.length ? ` and all ${GO.length} Go frameworks` : ''} land between ${fmt(lo)} and ${fmt(hi)} req/s. k6 runs 5000 virtual users on the same 4 vCPUs as the server and Postgres, so the load generator is the bottleneck for the light endpoints.`]);
+  const s1 = ranked(single);
+  if (s1.length > 1) tk.push(['Single process', `${s1.map((r) => `${r.label} ${fmt(r.rps)}`).join(', ')} req/s. With one JavaScript thread, the HTTP layer and event loop are what differ, and ${s1[0].label} has the fastest.`]);
+  const pairs = ['node', 'deno', 'bun'].map(pair).filter(([a, b]) => a && b);
+  if (pairs.length) tk.push(['A worker per CPU helps CPU work, not req/s', `Spreading over 4 cores barely changes overall throughput here (${pairs.map(([a, b]) => `${b.label} ${pct(b.rps, a.rps)}`).join(', ')}), because k6 needs those cores too. It does cut heavy-compute latency: ${pairs.map(([a, b]) => `${a.label} ${ms(a.scenAvg[h] / 1000)} s → ${ms(b.scenAvg[h] / 1000)} s`).join(', ')}.`]);
+  const tail = [...multi].sort((a, b) => b.scenP95[h] - a.scenP95[h]);
+  if (tail.length > 1) tk.push(['Heavy-compute tail', `p95 for the heavy scenario with a worker per CPU: ${tail.map((r) => `${r.label} ${ms(r.scenP95[h] / 1000)} s`).join(', ')}. One fibonacci(30) blocks a worker's event loop, so requests queued behind it on the same worker wait.`]);
+  if (bestGo) {
+    const fastHeavy = [...JS].sort((a, b) => a.scenAvg[h] - b.scenAvg[h])[0];
+    tk.push(['JavaScript vs Go', `${bestJS.label} reached ${fmt(bestJS.rps)} req/s against ${fmt(bestGo.rps)} for ${bestGo.label} (${pct(bestJS.rps, bestGo.rps)}). Go pulls ahead on CPU work: ${ms(bestGo.scenAvg[h] / 1000)} s average on the heavy scenario vs ${ms(fastHeavy.scenAvg[h] / 1000)} s for the fastest JS variant (${fastHeavy.label}).`]);
+  }
+  if (bestPHP) tk.push(['JavaScript vs PHP', `Even the slowest JS variant (${worstJS.label}, ${fmt(worstJS.rps)} req/s) has ${fmt(worstJS.rps / bestPHP.rps, 1)}× the throughput of the fastest PHP runtime, ${bestPHP.label} (${fmt(bestPHP.rps)} req/s), on the same machine and test.`]);
+  const fail = JS.filter((r) => r.failed >= 0.01);
+  if (fail.length) tk.push(['Failed requests', `${fail.map((r) => `${r.label} ${fmt(r.failed, 2)}%`).join(', ')}.`]);
+  $('takeaways').innerHTML = tk.map(([t, p]) => `<div class="card"><h3>${esc(t)}</h3><p>${esc(p)}</p></div>`).join('');
+}
+
+// ─── Per-scenario table ──────────────────────────
+{
+  let h = `<tr><th>Scenario</th><th>VUs</th>${JS.map((r) => `<th>${swatch(r)}${esc(r.label)}</th>`).join('')}${REF.map((r) => `<th>${esc(r.label)}</th>`).join('')}</tr>`;
+  SC.forEach((s, i) => {
+    const best = Math.min(...JS.map((r) => r.scenAvg[i]));
+    h += `<tr><td>${s.label}</td><td>${s.vus}</td>`
+      + JS.map((r) => `<td class="${r.scenAvg[i] === best ? 'best' : ''}">${ms(r.scenAvg[i])}<div class="p95">p95 ${ms(r.scenP95[i])}</div></td>`).join('')
+      + REF.map((r) => `<td class="ref">${ms(r.scenAvg[i])}<div class="p95">p95 ${ms(r.scenP95[i])}</div></td>`).join('') + '</tr>';
+  });
+  $('scen-table').innerHTML = h;
+}
+
+// ─── Overall table ───────────────────────────────
+{
+  const best = (k, low) => (low ? Math.min : Math.max)(...JS.map((r) => r[k]));
+  const b = { reqs: best('reqs'), rps: best('rps'), avg: best('avg', 1), p95: best('p95', 1) };
+  const cls = (r, k, ref) => (!ref && r[k] === b[k] ? 'best' : '');
+  const line = (r, ref) => `<tr class="${ref ? 'ref' : ''}"><td>${ref ? `<span class="dot" style="--c:var(--c-${r.hue})"></span>` : swatch(r)}${esc(r.label)} <span class="p95">${esc(r.detail)}</span></td>
+    <td class="${cls(r, 'reqs', ref)}">${fmt(r.reqs)}</td><td class="${cls(r, 'rps', ref)}">${fmt(r.rps)}</td>
+    <td>${fmt(r.failed, 2)}%</td><td class="${cls(r, 'avg', ref)}">${ms(r.avg)}</td><td class="${cls(r, 'p95', ref)}">${ms(r.p95)}</td></tr>`;
+  let h = '<tr><th>Runtime</th><th>Requests</th><th>Req/s</th><th>Failed</th><th>Avg (ms)</th><th>p95 (ms)</th></tr>';
+  h += '<tr class="group"><td colspan="6">JavaScript</td></tr>' + JS.map((r) => line(r, false)).join('');
+  if (GO.length) h += '<tr class="group"><td colspan="6">Go (reference)</td></tr>' + GO.map((r) => line(r, true)).join('');
+  if (PHP.length) h += '<tr class="group"><td colspan="6">PHP · Laravel 12 (reference)</td></tr>' + PHP.map((r) => line(r, true)).join('');
+  $('overall-table').innerHTML = h;
+}
+
+$('sources').textContent = 'Sources: ' + [...JS, ...GO, ...PHP].map((r) => r.source).join(', ');
+$('rps-key').innerHTML = `<span><span class="swatch" style="--c:var(--muted)"></span>Solid: one worker per CPU</span><span><span class="swatch hatch" style="--c:var(--muted)"></span>Hatched: single process</span>`;
+
+// ─── Charts ──────────────────────────────────────
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const charts = {};
+const color = (r) => css(`--c-${r.hue}`);
+
+// Single-process variants get a 135° hatch in the runtime's hue: identity is
+// carried by hue and label, mode by texture, never by a second color.
+const patterns = new Map();
+function fill(r) {
+  const c = color(r);
+  if (r.multi) return c;
+  const id = c + css('--surface');
+  if (!patterns.has(id)) {
+    const p = document.createElement('canvas');
+    p.width = p.height = 8;
+    const g = p.getContext('2d');
+    g.fillStyle = css('--surface'); g.fillRect(0, 0, 8, 8);
+    g.strokeStyle = c; g.lineWidth = 2.5;
+    g.beginPath();
+    for (const o of [-8, 0, 8]) { g.moveTo(o, 8); g.lineTo(o + 8, 0); }
+    g.stroke();
+    patterns.set(id, g.createPattern(p, 'repeat'));
+  }
+  return patterns.get(id);
+}
+
+// Value at the end of each throughput bar, in text ink (not the series color).
+const endLabels = {
+  id: 'endLabels',
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart;
+    const meta = chart.getDatasetMeta(0);
+    ctx.save();
+    ctx.font = '600 12px Inter, system-ui, sans-serif';
+    ctx.fillStyle = css('--fg'); ctx.textBaseline = 'middle';
+    meta.data.forEach((bar, i) => ctx.fillText(fmt(chart.data.datasets[0].data[i]), bar.x + 6, bar.y));
+    ctx.restore();
+  },
+};
+
+function drawRps(mode) {
+  const rows = (mode === 'all' ? [...JS, ...REF] : JS).slice().sort((a, b) => b.rps - a.rps);
+  charts.rps?.destroy();
+  charts.rps = new Chart($('rps-chart'), {
+    type: 'bar',
+    data: { labels: rows.map((r) => r.label), datasets: [{ data: rows.map((r) => r.rps), backgroundColor: rows.map(fill), borderColor: rows.map(color), borderWidth: rows.map((r) => (r.multi ? 0 : 1.5)), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 30 }] },
+    options: {
+      indexAxis: 'y', maintainAspectRatio: false, animation: { duration: 300 },
+      layout: { padding: { right: 56 } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ` ${fmt(c.raw)} req/s` } } },
+      scales: { x: { beginAtZero: true, ticks: { callback: (v) => fmt(v) } }, y: { grid: { display: false } } },
+    },
+    plugins: [endLabels],
+  });
+}
+
+function drawLat(metric, mode) {
+  const rows = mode === 'all' ? [...JS, ...REF] : JS;
+  charts.lat?.destroy();
+  charts.lat = new Chart($('lat-chart'), {
+    type: 'bar',
+    data: {
+      labels: SC.map((s) => s.label),
+      datasets: rows.map((r) => ({
+        label: r.label, data: metric === 'avg' ? r.scenAvg : r.scenP95,
+        backgroundColor: fill(r), borderColor: color(r), borderWidth: r.multi ? 0 : 1.5,
+        borderRadius: 4, borderSkipped: 'start', categoryPercentage: 0.8, barPercentage: 0.88,
+      })),
+    },
+    options: {
+      maintainAspectRatio: false, animation: { duration: 300 },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 14, boxHeight: 10, color: css('--muted') } },
+        tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${ms(c.raw)} ms` } },
+      },
+      scales: {
+        y: { type: 'logarithmic', ticks: { callback: (v) => [1, 10, 100, 1000, 10000, 100000].includes(v) ? (v >= 1000 ? `${v / 1000}s` : `${v}ms`) : '' } },
+        x: { grid: { display: false } },
+      },
+    },
+  });
+}
+
+const state = { rps: 'js', metric: 'avg', lat: 'js' };
+function seg(id, key, redraw) {
+  const el = $(id);
+  if (el.classList.contains('ref-toggle') && !REF.length) { el.style.display = 'none'; return; }
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    el.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    state[key] = b.dataset.v; redraw();
+  });
+}
+const redrawRps = () => drawRps(state.rps);
+const redrawLat = () => drawLat(state.metric, state.lat);
+seg('rps-ref', 'rps', redrawRps);
+seg('lat-metric', 'metric', redrawLat);
+seg('lat-ref', 'lat', redrawLat);
+
+function drawAll() {
+  Chart.defaults.color = css('--muted');
+  Chart.defaults.borderColor = css('--line');
+  Chart.defaults.font.family = 'Inter, system-ui, sans-serif';
+  redrawRps(); redrawLat();
+}
+if (window.Chart) {
+  drawAll();
+  // Axis labels are measured on first draw; redraw once Inter has loaded so they are not clipped.
+  document.fonts?.ready.then(() => drawAll());
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => window.Chart && drawAll());
+})();
+</script>
+</body>
+</html>
