@@ -1,0 +1,88 @@
+x-app: &app
+  ulimits:
+    # Default container soft limit is 1024 open files, too low for 5000 VUs.
+    nofile: { soft: 65535, hard: 65535 }
+  depends_on:
+    db:
+      condition: service_healthy
+  restart: unless-stopped
+
+x-env: &env
+  DB_HOST: db
+  DB_PORT: 5432
+  DB_DATABASE: js_bench
+  DB_USERNAME: bench
+  DB_PASSWORD: secret
+  # Connections per container, split across its worker processes.
+  DB_MAX_CONNS: ${DB_MAX_CONNS:-50}
+
+services:
+  db:
+    image: postgres:16-alpine
+    # 6 apps x 50 connections each, plus headroom.
+    command: ["postgres", "-c", "max_connections=400"]
+    environment:
+      POSTGRES_DB: js_bench
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bench -d js_bench"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # ── Node.js ────────────────────────────────
+  app-node:
+    <<: *app
+    build: { context: ., target: node }
+    ports: ["8001:8000"]
+    environment: { <<: *env, APP_RUNTIME: node, WORKERS: 1 }
+
+  app-node-cluster:
+    <<: *app
+    build: { context: ., target: node }
+    ports: ["8002:8000"]
+    environment: { <<: *env, APP_RUNTIME: node-cluster, WORKERS: auto }
+
+  # ── Deno ───────────────────────────────────
+  app-deno:
+    <<: *app
+    build: { context: ., target: deno }
+    ports: ["8003:8000"]
+    environment: { <<: *env, APP_RUNTIME: deno, WORKERS: 1 }
+
+  app-deno-parallel:
+    <<: *app
+    build: { context: ., target: deno }
+    ports: ["8004:8000"]
+    environment: { <<: *env, APP_RUNTIME: deno-parallel, WORKERS: auto, DENO_SERVE_FLAGS: --parallel }
+
+  # ── Bun ────────────────────────────────────
+  app-bun:
+    <<: *app
+    build: { context: ., target: bun }
+    ports: ["8005:8000"]
+    environment: { <<: *env, APP_RUNTIME: bun, WORKERS: 1 }
+
+  app-bun-reuseport:
+    <<: *app
+    build: { context: ., target: bun }
+    ports: ["8006:8000"]
+    environment: { <<: *env, APP_RUNTIME: bun-reuseport, WORKERS: auto }
+
+  # k6 load tester (run on demand)
+  k6:
+    image: grafana/k6:latest
+    volumes:
+      - ./k6:/scripts
+      - ./results:/results
+    environment:
+      # Raw per-request output is off by default: it is huge and eats CPU the
+      # servers need. Set K6_OUT=json=/results/raw.json to enable it.
+      K6_OUT: ${K6_OUT:-}
+    profiles: [bench]
+
+volumes:
+  pgdata:
