@@ -1,0 +1,9 @@
+{
+  "name": "js-runtime-bench",
+  "private": true,
+  "type": "module",
+  "description": "Node.js vs Deno vs Bun: the same API under the same k6 load test",
+  "dependencies": {
+    "postgres": "4.1.0"
+  }
+}
